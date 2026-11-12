@@ -1,0 +1,14 @@
+{
+  "healthchecks": {
+    "web": [
+      {
+        "type": "startup",
+        "name": "ocr-api health",
+        "description": "Waiting for ocr-api to accept requests",
+        "path": "/health",
+        "attempts": 10,
+        "wait": 3
+      }
+    ]
+  }
+}
