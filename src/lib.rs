@@ -5,7 +5,7 @@
 //! carries a non-Mistral `lines` array (text, score, box) that Mistral clients
 //! ignore.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -18,53 +18,116 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rusto::{DetectTextResult, ImageSource, InitializeConfig, OcrRunOptions, RustO};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{Mutex, Semaphore};
-
-pub const DEFAULT_MODEL: &str = "rusto-ppocrv6-tiny";
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 const MAX_DOC_BYTES: usize = 32 * 1024 * 1024;
 
 pub struct Config {
-    pub model_dir: PathBuf,
+    /// Named PP-OCRv6 model directories (each holds det.onnx, rec.onnx, dict.txt), e.g. ("tiny", ...).
+    pub models: Vec<(String, PathBuf)>,
+    /// Model used when the request names none, or names a Mistral model such as `mistral-ocr-latest`.
+    pub default_model: String,
+    /// Engines per model. An engine is single-threaded; models load on first use.
     pub pool_size: usize,
     pub api_key: Option<String>,
     /// Hosts `document_url` / `image_url` may be fetched from. Empty = no remote fetch.
     pub allowed_hosts: Vec<String>,
 }
 
-pub struct AppState {
+/// One model's engines, loaded on first request so unused models cost no memory.
+struct ModelPool {
+    dir: PathBuf,
+    size: usize,
+    pool: OnceCell<Pool>,
+}
+
+struct Pool {
     engines: Mutex<Vec<RustO>>,
     permits: Semaphore,
+}
+
+pub struct AppState {
+    models: BTreeMap<String, ModelPool>,
+    default_model: String,
     api_key: Option<String>,
     allowed_hosts: Vec<String>,
 }
 
 pub fn build_state(cfg: Config) -> Result<Arc<AppState>, String> {
-    let det = cfg.model_dir.join("det.onnx");
-    let rec = cfg.model_dir.join("rec.onnx");
-    let dict = cfg.model_dir.join("dict.txt");
-    for p in [&det, &rec, &dict] {
-        if !p.is_file() {
-            return Err(format!("missing model file: {}", p.display()));
-        }
-    }
     let size = cfg.pool_size.clamp(1, 64);
-    let mut engines = Vec::with_capacity(size);
-    for _ in 0..size {
-        let engine = RustO::initialize(InitializeConfig::ppv6(det.clone(), rec.clone(), dict.clone()))
-            .map_err(|e| format!("rusto init failed: {e}"))?;
-        engines.push(engine);
+    let mut models = BTreeMap::new();
+    for (name, dir) in cfg.models {
+        for file in ["det.onnx", "rec.onnx", "dict.txt"] {
+            if !dir.join(file).is_file() {
+                return Err(format!("model '{name}': missing {}", dir.join(file).display()));
+            }
+        }
+        models.insert(name, ModelPool { dir, size, pool: OnceCell::new() });
+    }
+    if !models.contains_key(&cfg.default_model) {
+        return Err(format!(
+            "default model '{}' not found; have: {}",
+            cfg.default_model,
+            models.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
     }
     Ok(Arc::new(AppState {
-        engines: Mutex::new(engines),
-        permits: Semaphore::new(size),
+        models,
+        default_model: cfg.default_model,
         api_key: cfg.api_key,
         allowed_hosts: cfg.allowed_hosts,
     }))
 }
 
+impl ModelPool {
+    async fn pool(&self) -> Result<&Pool, String> {
+        self.pool
+            .get_or_try_init(|| async {
+                let dir = self.dir.clone();
+                let size = self.size;
+                tokio::task::spawn_blocking(move || {
+                    let mut engines = Vec::with_capacity(size);
+                    for _ in 0..size {
+                        engines.push(
+                            RustO::initialize(InitializeConfig::ppv6(
+                                dir.join("det.onnx"),
+                                dir.join("rec.onnx"),
+                                dir.join("dict.txt"),
+                            ))
+                            .map_err(|e| format!("rusto init failed: {e}"))?,
+                        );
+                    }
+                    Ok::<_, String>(Pool { engines: Mutex::new(engines), permits: Semaphore::new(size) })
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            })
+            .await
+    }
+}
+
+impl AppState {
+    /// `rusto-ppocrv6-<name>` and bare `<name>` select a model; Mistral model ids and no
+    /// model select the default; anything else is an error rather than a silent fallback.
+    fn resolve(&self, requested: Option<&str>) -> Result<&str, ApiError> {
+        let Some(m) = requested.filter(|m| !m.is_empty()) else { return Ok(&self.default_model) };
+        let name = m.strip_prefix("rusto-ppocrv6-").unwrap_or(m);
+        if let Some((key, _)) = self.models.get_key_value(name) {
+            return Ok(key);
+        }
+        if m.starts_with("mistral-ocr") {
+            return Ok(&self.default_model);
+        }
+        Err(bad_request(format!(
+            "unknown model '{m}'; available: {}",
+            self.models.keys().cloned().collect::<Vec<_>>().join(", ")
+        )))
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/v1/models", get(models))
         .route("/v1/ocr", post(ocr))
         .layer(DefaultBodyLimit::max(MAX_DOC_BYTES * 2))
         .with_state(state)
@@ -180,6 +243,7 @@ async fn ocr(
     .url()
     .to_owned();
 
+    let model = state.resolve(req.model.as_deref())?.to_owned();
     let bytes = load_document(&state, &url).await?;
     if bytes.starts_with(b"%PDF") {
         return Err(bad_request("PDF input is not supported yet; send an image"));
@@ -188,7 +252,7 @@ async fn ocr(
         .map_err(|_| bad_request("document is not a recognizable image"))?;
 
     let doc_size = bytes.len();
-    let lines = run_ocr(&state, bytes).await?;
+    let lines = run_ocr(&state, &model, bytes).await?;
     let markdown = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
 
     Ok(Json(OcrResponse {
@@ -199,7 +263,7 @@ async fn ocr(
             dimensions: Dimensions { dpi: None, height: size.height as u32, width: size.width as u32 },
             lines,
         }],
-        model: req.model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+        model: format!("rusto-ppocrv6-{model}"),
         usage_info: UsageInfo { pages_processed: 1, doc_size_bytes: doc_size },
     }))
 }
@@ -272,11 +336,22 @@ fn check_size(bytes: Vec<u8>) -> Result<Vec<u8>, ApiError> {
     Ok(bytes)
 }
 
-async fn run_ocr(state: &Arc<AppState>, bytes: Vec<u8>) -> Result<Vec<Line>, ApiError> {
+async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Result<Json<serde_json::Value>, ApiError> {
+    authorize(&state, &headers)?;
+    let data: Vec<_> = state
+        .models
+        .keys()
+        .map(|name| json!({"id": name, "object": "model", "default": *name == state.default_model}))
+        .collect();
+    Ok(Json(json!({"object": "list", "data": data})))
+}
+
+async fn run_ocr(state: &Arc<AppState>, model: &str, bytes: Vec<u8>) -> Result<Vec<Line>, ApiError> {
     let server_error = |m: String| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "server_error", m);
 
-    let _permit = state.permits.acquire().await.map_err(|e| server_error(e.to_string()))?;
-    let mut engine = state.engines.lock().await.pop().ok_or_else(|| server_error("engine pool empty".into()))?;
+    let pool = state.models[model].pool().await.map_err(&server_error)?;
+    let _permit = pool.permits.acquire().await.map_err(|e| server_error(e.to_string()))?;
+    let mut engine = pool.engines.lock().await.pop().ok_or_else(|| server_error("engine pool empty".into()))?;
 
     // Inference is CPU-bound and cannot be interrupted; run it off the async threads
     // and always return the engine to the pool.
@@ -286,7 +361,7 @@ async fn run_ocr(state: &Arc<AppState>, bytes: Vec<u8>) -> Result<Vec<Line>, Api
     })
     .await
     .map_err(|e| server_error(e.to_string()))?;
-    state.engines.lock().await.push(engine);
+    pool.engines.lock().await.push(engine);
 
     match result {
         Ok(DetectTextResult::Structured(rs)) => Ok(rs

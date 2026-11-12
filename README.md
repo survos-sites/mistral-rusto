@@ -25,14 +25,16 @@ returns plain lines. Neither has been scored on newspaper scans.
 ## Run
 
 ```bash
-OCR_MODEL_DIR=/path/to/tiny cargo run --release   # needs det.onnx, rec.onnx, dict.txt
+OCR_MODELS_DIR=/path/to/models cargo run --release   # tiny/, small/, ... each with det.onnx, rec.onnx, dict.txt
 ```
 
 | Env | Default | |
 |---|---|---|
-| `OCR_MODEL_DIR` | `models/tiny` | Tiny weights (same files imagor uses; sha256s in imagor `docker/imagor/ocr-models.sha256`) |
+| `OCR_MODELS_DIR` | | one subdirectory per model (`tiny`, `small`, ...); each loads on first use. Tiny's sha256s are in imagor `docker/imagor/ocr-models.sha256` |
+| `OCR_MODEL_DIR` | `models/tiny` | single-model shortcut, served as `tiny` (used when `OCR_MODELS_DIR` is unset) |
+| `OCR_DEFAULT_MODEL` | `tiny` | used when the request names no model, or a Mistral id like `mistral-ocr-latest` |
 | `OCR_LISTEN` | `127.0.0.1:8895` | |
-| `OCR_POOL_SIZE` | `2` | engines; an engine is single-threaded |
+| `OCR_POOL_SIZE` | `2` | engines per model; an engine is single-threaded |
 | `OCR_API_KEY` | unset | if set, requires `Authorization: Bearer <key>` |
 | `OCR_ALLOWED_HOSTS` | empty | hosts `image_url`/`document_url` may be fetched from; `data:` URIs always work |
 
@@ -45,8 +47,13 @@ curl -s localhost:8895/v1/ocr -H 'content-type: application/json' -d '{
 }'
 ```
 
+## Models
+
+`"model": "tiny"` (or `small`, or `rusto-ppocrv6-small`) picks the model per request; `GET /v1/models` lists them.
+Mistral ids (`mistral-ocr-*`) and no model use the default; any other name is a 400.
+
 ## Test
 
 ```bash
-OCR_MODEL_DIR=/path/to/tiny cargo test
+OCR_MODELS_DIR=/path/to/models cargo test
 ```

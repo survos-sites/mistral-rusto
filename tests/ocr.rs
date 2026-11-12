@@ -6,14 +6,23 @@ use http_body_util::BodyExt;
 use ocr_api::{build_state, router, Config};
 use tower::ServiceExt;
 
-fn model_dir() -> Option<PathBuf> {
-    let dir: PathBuf = std::env::var("OCR_MODEL_DIR").ok()?.into();
-    dir.join("det.onnx").is_file().then_some(dir)
+/// OCR_MODELS_DIR holds one subdirectory per model (tiny/, small/, ...).
+fn models() -> Option<Vec<(String, PathBuf)>> {
+    let root: PathBuf = std::env::var("OCR_MODELS_DIR").ok()?.into();
+    let mut found: Vec<_> = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.path().join("det.onnx").is_file())
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+        .collect();
+    found.sort();
+    (!found.is_empty()).then_some(found)
 }
 
 fn app(api_key: Option<&str>) -> Option<axum::Router> {
     let state = build_state(Config {
-        model_dir: model_dir()?,
+        models: models()?,
+        default_model: "tiny".into(),
         pool_size: 1,
         api_key: api_key.map(String::from),
         allowed_hosts: vec![],
@@ -42,13 +51,13 @@ const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/text.png");
 
 #[tokio::test]
 async fn ocr_returns_mistral_shape() {
-    let Some(app) = app(None) else { eprintln!("OCR_MODEL_DIR not set; skipping"); return };
+    let Some(app) = app(None) else { eprintln!("OCR_MODELS_DIR not set; skipping"); return };
     let (status, v) = post(app, None, serde_json::json!({
         "model": "mistral-ocr-latest",
         "document": {"type": "image_url", "image_url": data_uri(FIXTURE)}
     })).await;
     assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(v["model"], "mistral-ocr-latest");
+    assert_eq!(v["model"], "rusto-ppocrv6-tiny");
     assert_eq!(v["usage_info"]["pages_processed"], 1);
     let page = &v["pages"][0];
     assert_eq!(page["index"], 0);
@@ -77,4 +86,26 @@ async fn rejects_bad_input() {
     let pdf = format!("data:application/pdf;base64,{}", STANDARD.encode(b"%PDF-1.4 x"));
     let (s, _) = post(app, None, serde_json::json!({"document": {"type": "document_url", "document_url": pdf}})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn selects_model_per_request() {
+    let Some(app) = app(None) else { return };
+    let have_small = models().unwrap().iter().any(|(n, _)| n == "small");
+    let doc = serde_json::json!({"type": "image_url", "image_url": data_uri(FIXTURE)});
+
+    let (s, v) = post(app.clone(), None, serde_json::json!({"model": "tiny", "document": doc})).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["model"], "rusto-ppocrv6-tiny");
+
+    if have_small {
+        let (s, v) = post(app.clone(), None, serde_json::json!({"model": "small", "document": doc})).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["model"], "rusto-ppocrv6-small");
+        assert!(!v["pages"][0]["markdown"].as_str().unwrap().trim().is_empty());
+    }
+
+    let (s, v) = post(app, None, serde_json::json!({"model": "no-such-model", "document": doc})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(v["message"].as_str().unwrap().contains("available:"), "{v}");
 }
