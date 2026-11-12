@@ -1,0 +1,23 @@
+[package]
+name = "ocr-api"
+version = "0.1.0"
+edition = "2021"
+description = "Mistral-compatible POST /v1/ocr on top of rusto-rs (PP-OCRv6 Tiny)"
+
+[dependencies]
+rusto-rs = { git = "https://github.com/byrizki/rusto-rs", rev = "f988c448878a88ebc22462d10c6f8441feaab252", features = ["rten"] }
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+imagesize = "0.13"
+ureq = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+# rten inference is unusably slow unoptimized; keep dependencies optimized in dev/test.
+[profile.dev.package."*"]
+opt-level = 3
