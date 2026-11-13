@@ -5,7 +5,7 @@ edition = "2021"
 description = "Mistral-compatible POST /v1/ocr on top of rusto-rs (PP-OCRv6 Tiny)"
 
 [dependencies]
-rusto-rs = { git = "https://github.com/byrizki/rusto-rs", rev = "f988c448878a88ebc22462d10c6f8441feaab252", features = ["rten"] }
+rusto-rs = { git = "https://github.com/byrizki/rusto-rs", rev = "4d28dc26dc677e94699bdfdd0b838801549d577a", features = ["rten"] }
 axum = { version = "0.8", features = ["json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }

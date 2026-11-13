@@ -273,15 +273,6 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "flatbuffers"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a788f068dd10687940565bf4b5480ee943176cbd114b12e811074bcf7c04e4b9"
-dependencies = [
- "smallvec",
-]
-
-[[package]]
-name = "flatbuffers"
 version = "24.12.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f1baf0dbf96932ec9a3038d57900329c015b0bfb7b63d904f3bc27e2b02a096"
@@ -834,7 +825,7 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "639c5d2ce961f3e154878d1d48c2ac3451e5a6ea5d9c0b0d5f0da362f4c57dab"
 dependencies = [
- "flatbuffers 24.12.23",
+ "flatbuffers",
  "num_cpus",
  "rayon",
  "rten-base",
@@ -877,7 +868,7 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bc4ee6d1e064a84cbffd240c3bfde0d7a1b4d5172f577c9c821fcf0b7124f00"
 dependencies = [
- "flatbuffers 24.12.23",
+ "flatbuffers",
  "rten-base",
 ]
 
@@ -989,12 +980,11 @@ dependencies = [
 [[package]]
 name = "rusto-core"
 version = "0.4.0"
-source = "git+https://github.com/byrizki/rusto-rs?rev=f988c448878a88ebc22462d10c6f8441feaab252#f988c448878a88ebc22462d10c6f8441feaab252"
+source = "git+https://github.com/byrizki/rusto-rs?rev=4d28dc26dc677e94699bdfdd0b838801549d577a#4d28dc26dc677e94699bdfdd0b838801549d577a"
 dependencies = [
  "dirs",
  "image",
  "nanoserde",
- "rayon",
  "rusto-nn",
  "thiserror",
 ]
@@ -1002,11 +992,9 @@ dependencies = [
 [[package]]
 name = "rusto-nn"
 version = "0.4.0"
-source = "git+https://github.com/byrizki/rusto-rs?rev=f988c448878a88ebc22462d10c6f8441feaab252#f988c448878a88ebc22462d10c6f8441feaab252"
+source = "git+https://github.com/byrizki/rusto-rs?rev=4d28dc26dc677e94699bdfdd0b838801549d577a#4d28dc26dc677e94699bdfdd0b838801549d577a"
 dependencies = [
- "flatbuffers 0.6.1",
  "memmap2",
- "rayon",
  "rten-model-file",
  "rten-onnx",
  "smallvec",
@@ -1016,7 +1004,7 @@ dependencies = [
 [[package]]
 name = "rusto-rs"
 version = "0.4.0"
-source = "git+https://github.com/byrizki/rusto-rs?rev=f988c448878a88ebc22462d10c6f8441feaab252#f988c448878a88ebc22462d10c6f8441feaab252"
+source = "git+https://github.com/byrizki/rusto-rs?rev=4d28dc26dc677e94699bdfdd0b838801549d577a#4d28dc26dc677e94699bdfdd0b838801549d577a"
 dependencies = [
  "clap",
  "nanoserde",
@@ -1029,7 +1017,7 @@ dependencies = [
 [[package]]
 name = "rusto-rten"
 version = "0.4.0"
-source = "git+https://github.com/byrizki/rusto-rs?rev=f988c448878a88ebc22462d10c6f8441feaab252#f988c448878a88ebc22462d10c6f8441feaab252"
+source = "git+https://github.com/byrizki/rusto-rs?rev=4d28dc26dc677e94699bdfdd0b838801549d577a#4d28dc26dc677e94699bdfdd0b838801549d577a"
 dependencies = [
  "rten",
  "rten-tensor",
