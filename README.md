@@ -15,6 +15,10 @@ Status: prototype, in use for our own tests. It is a stop-gap: the proposal to b
 - Response: `pages[]` with `index`, `markdown`, `images` (always empty) and `dimensions` (`dpi` is null), plus `model` and
   `usage_info` (`pages_processed`, `doc_size_bytes`). Each page also has a non-Mistral `lines` array
   (`text`, `score`, `box`) that Mistral clients ignore.
+- EXIF orientation is applied to the pixels before OCR (phone photos store the sensor's pixels plus a tag); send
+  `"autorotate": false` to read the pixels as stored. Rotated images are re-encoded as JPEG (q95). Each page also
+  reports `orientation_corrected` and `text_angle` (degrees, the length-weighted median slope of the lines).
+  These are non-Mistral fields; Mistral clients ignore them.
 - `GET /v1/models`, `GET /health`, optional bearer-token auth, Mistral's error envelope.
 - Choosing the model per request: `"model": "tiny"` or `"small"` (also `rusto-ppocrv6-small`).
   Mistral ids (`mistral-ocr-*`) and no model use the default, `tiny`; any other name is a 400.

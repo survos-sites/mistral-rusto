@@ -703,6 +703,7 @@ dependencies = [
  "axum",
  "base64",
  "http-body-util",
+ "image",
  "imagesize",
  "rusto-rs",
  "serde",

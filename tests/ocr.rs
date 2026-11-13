@@ -109,3 +109,30 @@ async fn selects_model_per_request() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert!(v["message"].as_str().unwrap().contains("available:"), "{v}");
 }
+
+#[tokio::test]
+async fn exif_orientation_is_applied_before_ocr() {
+    let Some(app) = app(None) else { eprintln!("OCR_MODELS_DIR not set; skipping"); return };
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/text-rot6.jpg")).expect("fixture");
+    let uri = format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes));
+    let (status, v) = post(app, None, serde_json::json!({"document": {"type": "image_url", "image_url": uri}})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let page = &v["pages"][0];
+    assert_eq!(page["orientation_corrected"], true);
+    // The stored pixels are 160x700 (portrait); upright they are 700x160.
+    assert_eq!(page["dimensions"]["width"], 700, "{page}");
+    assert_eq!(page["dimensions"]["height"], 160, "{page}");
+    assert!(!page["markdown"].as_str().unwrap().trim().is_empty(), "no text read after rotation: {page}");
+    assert!(page["text_angle"].as_f64().unwrap().abs() < 5.0, "{page}");
+}
+
+#[tokio::test]
+async fn autorotate_can_be_switched_off() {
+    let Some(app) = app(None) else { eprintln!("OCR_MODELS_DIR not set; skipping"); return };
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/text-rot6.jpg")).expect("fixture");
+    let uri = format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes));
+    let (status, v) = post(app, None, serde_json::json!({"autorotate": false, "document": {"type": "image_url", "image_url": uri}})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["pages"][0]["orientation_corrected"], false);
+    assert_eq!(v["pages"][0]["dimensions"]["width"], 160, "{}", v["pages"][0]);
+}

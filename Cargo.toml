@@ -12,6 +12,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 imagesize = "0.13"
+# Same version and features as rusto-rs, so the lockfile keeps one copy. Used to apply EXIF orientation.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ureq = "2"
 
 [dev-dependencies]

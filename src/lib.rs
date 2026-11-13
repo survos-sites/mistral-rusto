@@ -139,6 +139,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 struct OcrRequest {
     model: Option<String>,
     document: Document,
+    /// Not part of the Mistral schema. Apply the EXIF orientation before OCR (default true). EXIF tags
+    /// are not always accurate, so a client can send false to read the pixels as stored.
+    autorotate: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +183,11 @@ struct Page {
     dimensions: Dimensions,
     /// Not part of the Mistral schema; ignored by Mistral clients.
     lines: Vec<Line>,
+    /// Not part of the Mistral schema. True when an EXIF orientation was applied to the pixels before OCR.
+    orientation_corrected: bool,
+    /// Not part of the Mistral schema. Dominant slope of the lines in degrees (0 = horizontal, clockwise
+    /// positive, image y points down): length-weighted median of each box's top edge. Null with no lines.
+    text_angle: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -248,11 +256,17 @@ async fn ocr(
     if bytes.starts_with(b"%PDF") {
         return Err(bad_request("PDF input is not supported yet; send an image"));
     }
+    let doc_size = bytes.len();
+    // Phones store the sensor's pixels plus an EXIF orientation; rusto ignores the tag, so apply it first.
+    let autorotate = req.autorotate.unwrap_or(true);
+    let (bytes, orientation_corrected) = tokio::task::spawn_blocking(move || if autorotate { upright(bytes) } else { (bytes, false) })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "server_error", e.to_string()))?;
     let size = imagesize::blob_size(&bytes)
         .map_err(|_| bad_request("document is not a recognizable image"))?;
 
-    let doc_size = bytes.len();
     let lines = run_ocr(&state, &model, bytes).await?;
+    let text_angle = text_angle(&lines);
     let markdown = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
 
     Ok(Json(OcrResponse {
@@ -262,6 +276,8 @@ async fn ocr(
             images: vec![],
             dimensions: Dimensions { dpi: None, height: size.height as u32, width: size.width as u32 },
             lines,
+            orientation_corrected,
+            text_angle,
         }],
         model: format!("rusto-ppocrv6-{model}"),
         usage_info: UsageInfo { pages_processed: 1, doc_size_bytes: doc_size },
@@ -371,4 +387,55 @@ async fn run_ocr(state: &Arc<AppState>, model: &str, bytes: Vec<u8>) -> Result<V
         Ok(DetectTextResult::Spatial(_)) => Err(server_error("unexpected spatial output".into())),
         Err(e) => Err(bad_request(format!("OCR failed: {e}"))),
     }
+}
+
+/// Applies the EXIF orientation to the pixels. Returns the bytes unchanged (and false) when there is
+/// nothing to apply or the image cannot be decoded here; rotated images are re-encoded as JPEG (q95).
+fn upright(bytes: Vec<u8>) -> (Vec<u8>, bool) {
+    match rotated_copy(&bytes) {
+        Some(out) => (out, true),
+        None => (bytes, false),
+    }
+}
+
+fn rotated_copy(bytes: &[u8]) -> Option<Vec<u8>> {
+    use image::{metadata::Orientation, DynamicImage, ImageDecoder, ImageReader};
+    use std::io::Cursor;
+
+    let mut decoder = ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_decoder().ok()?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    if orientation == Orientation::NoTransforms {
+        return None;
+    }
+    let mut img = DynamicImage::from_decoder(decoder).ok()?;
+    img.apply_orientation(orientation);
+    let mut out = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95);
+    img.to_rgb8().write_with_encoder(encoder).ok()?;
+    Some(out)
+}
+
+/// Length-weighted median of each line's top-edge angle, in degrees.
+fn text_angle(lines: &[Line]) -> Option<f32> {
+    let mut v: Vec<(f32, f32)> = lines
+        .iter()
+        .filter_map(|l| {
+            let (dx, dy) = (l.corners[1].0 - l.corners[0].0, l.corners[1].1 - l.corners[0].1);
+            let len = dx.hypot(dy);
+            (len > 0.0).then(|| (dy.atan2(dx).to_degrees(), len))
+        })
+        .collect();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let half = v.iter().map(|x| x.1).sum::<f32>() / 2.0;
+    let mut acc = 0.0;
+    for (angle, w) in &v {
+        acc += w;
+        if acc >= half {
+            return Some((angle * 10.0).round() / 10.0);
+        }
+    }
+    v.last().map(|x| x.0)
 }
