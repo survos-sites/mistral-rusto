@@ -19,3 +19,9 @@ For what the server supports, its environment variables and how to run it, see
 To move to a newer rusto-rs, change `RUSTO_REV` in the `Dockerfile` and push to Dokku; the build runs the tests.
 
 Earlier measurements of `tiny` against `small` on gravestone photos: [byrizki/rusto-rs#29](https://github.com/byrizki/rusto-rs/issues/29).
+
+## Using it
+
+`POST /v1/ocr` with `{"model":"tiny"|"small","document":{"type":"image_url","image_url":"<https or data: URL>"}}` and a bearer key.
+Send images scaled to about 2400 px on the long side (for example imagor `fit-in/2400x2400`): full-size photos exhausted the
+container's 768 MB memory limit. Images only; PDFs are not supported here. Client example: `RustoOcr` in the scanfony repository.
